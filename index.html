@@ -1,0 +1,548 @@
+import numpy as np
+import pandas as pd
+import sklearn
+import matplotlib as mpl
+from datetime import datetime as dt
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+
+
+data_event        = pd.read_csv(r'C:\Users\PC_User\Documents\kaggle\shop\data\raw\holidays_events.csv')
+data_oil          = pd.read_csv(r'C:\Users\PC_User\Documents\kaggle\shop\data\raw\oil.csv')
+data_submission   = pd.read_csv(r'C:\Users\PC_User\Documents\kaggle\shop\data\raw\sample_submission.csv')
+data_stores       = pd.read_csv(r'C:\Users\PC_User\Documents\kaggle\shop\data\raw\stores.csv')
+data_test         = pd.read_csv(r'C:\Users\PC_User\Documents\kaggle\shop\data\raw\test.csv')
+data_train        = pd.read_csv(r'C:\Users\PC_User\Documents\kaggle\shop\data\raw\train.csv')
+data_transactions = pd.read_csv(r'C:\Users\PC_User\Documents\kaggle\shop\data\raw\transactions.csv')
+
+#欠損値無し
+data_event.info()
+data_event.describe()
+
+#dcoilwticoに欠損値あり
+data_oil.info()
+data_oil.describe()
+
+#欠損値無し
+data_submission.info()
+data_submission.describe()
+
+#欠損値無し
+data_stores.info()
+data_stores.describe()
+
+#欠損値無し
+data_test.info()
+data_test.describe()
+
+
+#欠損値無し
+data_transactions.info()
+data_transactions.describe()
+
+
+
+#data_eventの前処理
+#日付データを数値データに変換
+data_event['date_n'] = pd.to_datetime ( data_event['date'],format = '%Y-%m-%d')
+#カテゴリーデータに変換
+data_event[['type_holiday', 'locale1', 'locale_name1']] = data_event[['type', 'locale', 'locale_name']].astype('category')
+data_event1 = data_event.drop(['type', 'locale', 'locale_name' , 'date'], axis=1)
+
+
+
+#data_oilの前処理
+data_oil['date_n'] = pd.to_datetime(data_oil['date'] , format = '%Y-%m-%d')
+#重複の確認
+duplicates = data_oil.duplicated()
+#dcoilwtico（石油価格）に欠損値がある
+#これを補うために前日のデータを使用して補完する
+data_oil['dcoilwtico1'] = data_oil['dcoilwtico'].fillna(method = 'ffill')
+#１行目が欠損値の場合は２行目のデータで補完する
+if pd.isna(data_oil['dcoilwtico1'].iloc[0]):
+    data_oil['dcoilwtico1'].iloc[0] = data_oil['dcoilwtico1'].iloc[1]
+data_oil1 = data_oil.drop(['dcoilwtico', 'date'], axis=1)
+
+
+
+#data_storesの前処理
+data_stores[['city1' , 'state1' , 'type_stores']] = data_stores[['city' , 'state' , 'type']].astype('category')
+data_stores1 = data_stores.drop(['city', 'state', 'type'], axis=1)
+
+
+
+#data_transactionsの前処理
+data_transactions['date_n'] = pd.to_datetime(data_transactions['date'] , format = '%Y-%m-%d')
+data_transactions1 = data_transactions.drop('date', axis = 1)
+
+#data_trainの前処理
+data_train['date_n'] = pd.to_datetime(data_train['date'] , format = '%Y-%m-%d')
+data_train1 = data_train.drop('date' , axis = 1)
+data_train1['family1'] = data_train1['family'].astype('category')
+
+#data_testの前処理
+data_test['date_n'] = pd.to_datetime (data_test['date'] , format = '%Y-%m-%d' )
+data_test1 = data_test.drop('date' , axis = 1 )
+data_test1['family1'] = data_test1['family'].astype('category') 
+
+print(data_event1.columns)
+print(data_oil1.columns)
+print(data_test1.columns)
+print(data_train1.columns)
+print(data_transactions1.columns)
+print(data_stores1.columns)
+
+#date_nとstore_nbrがあるものを結合
+#この際にtest1とtrain1でそれぞれ結合
+
+train_merge1 = pd.merge ( data_train1  , data_event1        , on = 'date_n'                    , how = 'left')
+train_merge2 = pd.merge ( train_merge1 , data_oil1          , on = 'date_n'                    , how = 'left')
+train_merge3 = pd.merge ( train_merge2 , data_transactions1 , on = [ 'date_n'  , 'store_nbr' ] , how = 'left')
+train_all    = pd.merge ( train_merge3 , data_stores1        , on = 'store_nbr'                 , how = 'left') 
+
+
+print ('桁:' , len(train_merge1))
+print ('桁:' , len(train_merge2))
+print ('桁:' , len(train_merge3))
+print ('桁:' , len(train_all))#3054348
+
+
+# 例：左結合の使用
+test_merge1 = pd.merge ( data_test1  , data_event1        , on = 'date_n'                    , how = 'left')
+test_merge2 = pd.merge ( test_merge1 , data_oil1          , on = 'date_n'                    , how = 'left')
+test_merge3 = pd.merge ( test_merge2 , data_transactions1 , on = [ 'date_n' , 'store_nbr' ]  , how = 'left')
+test_all    = pd.merge ( test_merge3 , data_stores1        , on = 'store_nbr'                 , how = 'left' ) 
+
+print ('桁:' , len(test_merge1))
+print ('桁:' , len(test_merge2))
+print ('桁:' , len(test_merge3))
+print ('桁:' , len(test_all))#28512
+
+
+
+
+#条件指定や特徴量選択
+#エクアドルには地域ごとに色々な気候がある
+#年間通して一定の気温になっているが、地域ごとに気温の差はある
+#なのでtestデータが8月16～31日のデータではあることから、trainデータも同時期にする必要はない
+
+#時系列のプロット: 全期間のデータをプロットして、売上のトレンド、季節性、異常値を視覚的に確認します。
+#例えば、売上が年々増加しているか、または特定の季節に売上が増えるパターンがあるかどうかです。
+#→グラフを作成し特徴量や条件指定を見てみる
+
+
+
+#季節性特徴量: 月、週、曜日などの特徴量を追加することで、季節や曜日による売上の変動を捉えます。
+
+train_all['year']    = train_all['date_n'].dt.year
+train_all['month']   = train_all['date_n'].dt.month
+train_all['week']    = train_all['date_n'].dt.isocalendar().week
+train_all['weekday'] = train_all['date_n'].dt.strftime('%A')
+train_all['day']    = train_all['date_n'].dt.day
+train_all['dayofweek'] = train_all['date_n'].dt.dayofweek
+
+train_all['new_dcoilwtico'] = train_all['dcoilwtico1'].fillna(method = 'ffill')
+#１行目が欠損値の場合は２行目のデータで補完する
+if pd.isna(train_all['new_dcoilwtico'].iloc[0]):
+    train_all['new_dcoilwtico'].iloc[0] = train_all['new_dcoilwtico'].iloc[1]
+train_all = train_all.drop(['dcoilwtico1'], axis=1)
+
+# 各列の欠損値の数をカウント
+missing_values = train_all.isnull().sum()
+# 欠損値の数を表示
+print(missing_values)
+
+
+#ランダムにデータを抽出
+#ランダムサンプリング
+sampled_data = train_all.sample(n=100000, replace=False)
+
+#ランダム化して抽出したデータセットをエクセルファイルとして出力（デスクトップに出力）
+#import pandas as pd
+sampled_data.to_excel('~/desktop/output.xlsx')
+test_all.to_excel('~/desktop/test.xlsx')
+
+test_all['year']    = test_all['date_n'].dt.year
+test_all['month']   = test_all['date_n'].dt.month
+test_all['week']    = test_all['date_n'].dt.isocalendar().week
+test_all['weekday'] = test_all['date_n'].dt.strftime('%A')
+test_all['day']    = test_all['date_n'].dt.day
+test_all['dayofweek'] = test_all['date_n'].dt.dayofweek
+
+
+#グラフ作成
+#月ごとの売り上げの散布図
+month_total = sampled_data.groupby(['year' , 'month' ] )['sales'].sum().reset_index()
+years = month_total['year'].unique()
+num_years = len(years)
+fig, axs = plt.subplots(num_years, 1, figsize=(50, 10*num_years), sharex=True)
+for i , year in enumerate(years):
+    data = month_total[month_total['year'] == year]
+    x = data['month']
+    y = data['sales']
+    axs[i].bar(x, y)  # プロットのマーカーサイズを100に設定
+    plt.title(f'{year}年の月ごとの売り上げの散布図', fontname="MS Gothic")
+    plt.xlabel('月', fontname="MS Gothic")
+    plt.ylabel('売り上げ', fontname="MS Gothic")
+    axs[i].tick_params(axis='both', which='major', labelsize=50)  # x・y軸のラベルの文字サイズを20に設定
+    axs[i].set_xlabel('monh', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_ylabel('Sales', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_title(f'{year}年の曜日ごとの商品の売り上げ散布図', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].grid(True)    
+plt.grid(True)
+plt.show()
+
+
+
+
+#グラフ作成
+#商品ごとの月ごとの売り上げの散布図
+#グラフより穀物・飲み物が多いの売り上げが大きい
+
+# 商品ごとの売り上げ合計を計算
+sales_sum_per_family = sampled_data.groupby('family1')['sales'].sum()
+
+# 売り上げ合計で降順にソートし、上位10商品を選択
+top_10_families = sales_sum_per_family.sort_values(ascending=False).head(10).index
+
+# 年ごとにサブプロットを作成し、グラフを配置する
+years = sampled_data['year'].unique()
+num_years = len(years)
+fig, axs = plt.subplots(num_years, 1, figsize=(50, 10*num_years), sharex=True)
+
+for i, year in enumerate(years):
+    for family in top_10_families:
+        data = sampled_data[(sampled_data['family1'] == family) & (sampled_data['year'] == year)]
+        month_sales = data.groupby('month')['sales'].sum()
+        axs[i].scatter(month_sales.index, month_sales, label=family, s=500)  # プロットのマーカーサイズを100に設定
+    axs[i].tick_params(axis='both', which='major', labelsize=50)  # x・y軸のラベルの文字サイズを20に設定
+    axs[i].set_xlabel('monh', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_ylabel('Sales', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_title(f'{year}年の曜日ごとの商品の売り上げ散布図', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].grid(True)
+    axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), ncol=2 , fontsize = 50)
+
+plt.tight_layout()
+plt.show()
+
+
+
+
+#曜日ごとの商品の売り上げ散布図
+
+# 曜日ごとの商品の売り上げ散布図
+sales_sum_per_family = sampled_data.groupby('family1')['sales'].sum()
+
+# 売り上げ合計で降順にソートし、上位10商品を選択
+top_10_families = sales_sum_per_family.sort_values(ascending=False).head(10).index
+
+# 年ごとにサブプロットを作成し、グラフを配置する
+years = sampled_data['year'].unique()
+num_years = len(years)
+fig, axs = plt.subplots(num_years, 1, figsize=(50, 10*num_years), sharex=True)
+
+for i, year in enumerate(years):
+    for family in top_10_families:
+        data = sampled_data[(sampled_data['family1'] == family) & (sampled_data['year'] == year)]
+        week_sales = data.groupby('weekday')['sales'].sum()
+        axs[i].scatter(week_sales.index, week_sales, label=family, s=500)  # プロットのマーカーサイズを100に設定
+    axs[i].tick_params(axis='both', which='major', labelsize=50)  # x・y軸のラベルの文字サイズを20に設定
+    axs[i].set_xlabel('Weekday', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_ylabel('Sales', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_title(f'{year}年の曜日ごとの商品の売り上げ散布図', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].grid(True)
+    axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), ncol=2 , fontsize = 50)
+
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+#市ごとの売り上げ散布図
+sales_sum_per_family = sampled_data.groupby('city1')['sales'].sum()
+
+# 売り上げ合計で降順にソートし、上位10商品を選択
+top_10_families = sales_sum_per_family.sort_values(ascending=False).head(10).index
+
+# 年ごとにサブプロットを作成し、グラフを配置する
+years = sampled_data['year'].unique()
+num_years = len(years)
+fig, axs = plt.subplots(num_years, 1, figsize=(50, 10*num_years), sharex=True)
+
+for i, year in enumerate(years):
+    for family in top_10_families:
+        data = sampled_data[(sampled_data['city1'] == family) & (sampled_data['year'] == year)]
+        week_sales = data.groupby('weekday')['sales'].sum()
+        axs[i].scatter(week_sales.index, week_sales, label=family, s=500)  # プロットのマーカーサイズを100に設定
+    axs[i].tick_params(axis='both', which='major', labelsize=50)  # x・y軸のラベルの文字サイズを20に設定
+    axs[i].set_xlabel('Weekday', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_ylabel('Sales', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].set_title(f'{year}年の市ごとの商品の売り上げ散布図', fontname="MS Gothic" ,  fontsize=70)
+    axs[i].grid(True)
+    axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), ncol=2 , fontsize = 50)
+
+plt.tight_layout()
+plt.show()
+
+
+
+#月ごとの売上合計とオイル価格のグラフ作成
+
+#まずは月ごとの売上合計とオイル価格の平均を計算
+total_sales = sampled_data.groupby(['year', 'month'])['sales'].sum()
+total_oil = sampled_data.groupby(['year', 'month'])['new_dcoilwtico'].sum()
+total_sales_oil = pd.merge(total_sales, total_oil, on=["year", "month"], how="left").reset_index()
+
+# グラフ作成
+years = total_sales_oil["year"].unique()
+num_years = len(years)
+
+fig, axs = plt.subplots(num_years, 1, figsize=(70, 10*num_years), sharex=True)
+
+for i, year in enumerate(years):
+    data = total_sales_oil[total_sales_oil['year'] == year]
+    ax1 = axs[i]
+    ax2 = ax1.twinx()  # 2番目のy軸を作成
+    
+    # 売上をプロット
+    ax1.scatter(data['month'], data['sales'], s=500, marker='o', linestyle='-', label=f'{year}年の売上')
+    ax1.plot(data['month'], data['sales'], linestyle='-', color='blue')  # 線でプロット同士をつなぐ
+    ax1.set_xlabel('month', fontname="MS Gothic", fontsize=70)
+    ax1.set_ylabel('Sales', fontname="MS Gothic", fontsize=70)
+    ax1.tick_params(axis='both', which='major', labelsize=50)
+    
+    # 石油価格をプロット
+    ax2.scatter(data['month'], data['new_dcoilwtico'], s=500, marker='o', linestyle='-', label=f'{year}年の石油価格', color='red')
+    ax2.plot(data['month'], data['new_dcoilwtico'], linestyle='-', color='red')  # 線でプロット同士をつなぐ
+    ax2.set_ylabel('Oil Price', fontname="MS Gothic", fontsize=70 )
+    ax2.tick_params(axis='y', which='major', labelsize=50)
+    
+    # グラフのタイトル、凡例、グリッド
+    ax1.set_title(f'{year}年の月ごとの商品の売り上げと石油価格の比較の散布図', fontname="MS Gothic", fontsize=70)
+    ax1.grid(True)
+  
+
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+# 店舗クラスターと売上の関係
+# 各店舗のクラスターごとに売上を集計し、クラスターごとの売上高を比較するグラフを作成。これにより、どのクラスターが高売上を記録しているかを把握。
+
+# cluster列の変数値を表示する
+print(sampled_data['cluster'].unique())
+
+sales_cluster = sampled_data.groupby(['year', 'cluster'])['sales'].sum().reset_index()
+
+# グラフ作成
+years = sales_cluster["year"].unique()
+num_years = len(years)
+
+fig, axs = plt.subplots(num_years, 1, figsize=(70, 10*num_years), sharex=True)
+
+for i, year in enumerate(years):
+    data = sales_cluster[sales_cluster['year'] == year]
+    data1 = data.sort_values('sales', ascending=False)
+    x = data1['cluster']
+    y = data1['sales']
+    axs[i].bar(x, y)
+    axs[i].set_title(f'{year}年の店舗クラスターと売上の関係', fontname="MS Gothic", fontsize=80)
+    axs[i].set_xlabel('cluster', fontname="MS Gothic", fontsize=15)
+    axs[i].set_ylabel('sales', fontname="MS Gothic", fontsize=15)
+    axs[i].tick_params(axis='both', which='major', labelsize=70)     # x・y軸の数値のフォントサイズを設定
+    axs[i].set_xticks(x)
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+# トランザクション数と売上の関係
+# トランザクション数と売上をプロットして、トランザクションの多い日は売上が高い傾向にあるかを確認
+years = np.sort(sampled_data['year'].unique())  # 年を昇順にソート
+num_years = len(years)
+fig, axs = plt.subplots(num_years, 1, figsize=(50, 10*num_years), sharex=True)
+
+for i, year in enumerate(years):
+    data = sampled_data[(sampled_data['year'] == year) & (~sampled_data['transactions'].isnull())]
+    mod = LinearRegression()
+    x = data[['transactions']]  # DataFrame の形式に変換
+    y = data['sales']
+    mod.fit(x, y)
+    y_lin_fit = mod.predict(x)
+    r2_lin = mod.score(x, y)
+    axs[i].scatter(x, y, label=year, s=500)  # プロットのマーカーサイズを設定
+    axs[i].plot(x, y_lin_fit, color='red', linewidth=2)  # 回帰直線をプロット
+    axs[i].text(0.1, 0.9, f'$ R^2 = {r2_lin:.4f} $', transform=axs[i].transAxes, fontsize=60)  # 決定係数を表示
+    axs[i].tick_params(axis='both', which='major', labelsize=50)  # x・y軸のラベルの文字サイズを設定
+    axs[i].set_xlabel('onpromotion', fontname="MS Gothic", fontsize=70)
+    axs[i].set_ylabel('Sales', fontname="MS Gothic", fontsize=70)
+    axs[i].set_title(f'{year}年の取引数と商品の売り上げの散布図', fontname="MS Gothic", fontsize=70)
+    axs[i].grid(True)
+    axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), ncol=2, fontsize=50)
+
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+# onpromotion(プロモーション対象商品の数)と売り上げの相関関係
+years = np.sort(sampled_data['year'].unique())  # 年を昇順にソート
+num_years = len(years)
+fig, axs = plt.subplots(num_years, 1, figsize=(50, 10*num_years), sharex=True)
+
+for i, year in enumerate(years):
+    data = sampled_data[(sampled_data['year'] == year) & (~sampled_data['onpromotion'].isnull())]
+    mod = LinearRegression()
+    x = data[['onpromotion']]  # DataFrame の形式に変換
+    y = data['sales']
+    mod.fit(x, y)
+    y_lin_fit = mod.predict(x)
+    r2_lin = mod.score(x, y)
+    axs[i].scatter(x, y, label=year, s=500)  # プロットのマーカーサイズを設定
+    axs[i].plot(x, y_lin_fit, color='red', linewidth=2)  # 回帰直線をプロット
+    axs[i].text(0.1, 0.9, f'$ R^2 = {r2_lin:.4f} $', transform=axs[i].transAxes, fontsize=60)  # 決定係数を表示
+    axs[i].tick_params(axis='both', which='major', labelsize=50)  # x・y軸のラベルの文字サイズを設定
+    axs[i].set_xlabel('onpromotion', fontname="MS Gothic", fontsize=70)
+    axs[i].set_ylabel('Sales', fontname="MS Gothic", fontsize=70)
+    axs[i].set_title(f'{year}年のプロモーション対象商品と商品の売り上げの散布図', fontname="MS Gothic", fontsize=70)
+    axs[i].grid(True)
+    axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), ncol=2, fontsize=50)
+
+plt.tight_layout()
+plt.show()
+
+
+
+#主成分分析
+sampled_data1 = sampled_data.dropna(inplace=False)
+data_numeric = sampled_data1.select_dtypes(include = [np.number])
+# 標準化する
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+data_scaled = scaler.fit_transform(data_numeric)
+from sklearn.decomposition import PCA
+pca = PCA(n_components = 2)
+principalComponent = pca.fit_transform(data_scaled)
+print(pca.explained_variance_ratio_)
+import matplotlib.pyplot as plt
+plt.figure(figsize=(8,6))
+plt.scatter(principalComponent[:,0], principalComponent[:,1])
+plt.xlabel('First principal component')
+plt.ylabel('Second principal component')
+plt.title('PCA Result')
+plt.show()
+
+
+#ランダムフォレスト
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+import numpy as np
+features = ['store_nbr', 'year', 'month', 'day', 'dayofweek']
+target = 'sales'
+
+x = train_all[features]
+y = train_all[target]
+X_test = test_all[features]
+
+# 3. モデルのトレーニング
+X_train, X_val, y_train, y_val = train_test_split(x, y, test_size=0.2, random_state=42)
+
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# 4. 予測の実行
+y_pred = model.predict(X_val)
+test_pred = model.predict(X_test)
+
+# 5. 結果の評価
+mse = mean_squared_error(y_val, y_pred)
+rmse = np.sqrt(mse)
+print(f'Validation RMSE: {rmse}')
+
+# 6. 予測結果の保存
+test_all['sales'] = test_pred
+test_all[['id', 'sales']].to_csv('~\Documents\kaggle\shop\data\submission\submission.csv', index=False)
+print("予測結果をsubmission.xlsxに保存しました。")
+
+
+
+
+
+
+
+import pandas as pd
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+import numpy as np
+features = ['store_nbr', 'year', 'month', 'day', 'dayofweek']
+target = 'sales'
+
+x = train_all[features]
+y = train_all[target]
+X_test = test_all[features]
+
+param_grid = {
+    'n_estimators': [100, 200, 300],
+    'max_depth': [10, 20, 30],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4]
+}
+
+grid_search = GridSearchCV(estimator=RandomForestRegressor(random_state=42), param_grid=param_grid, cv=3, n_jobs=-1, verbose=2)
+grid_search.fit(x, y)
+
+best_model = grid_search.best_estimator_
+
+# 4. 予測の実行
+y_pred = best_model.predict(X_test)
+
+# 5. 結果の保存
+result_df = test_all[['id']].copy()
+result_df['sales'] = y_pred
+test_all[['id', 'sales']].to_csv('~\Documents\kaggle\shop\data\submission\submission.csv', index=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
